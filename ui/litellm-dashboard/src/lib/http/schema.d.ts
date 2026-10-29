@@ -47767,7 +47767,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "agent_traces_by_key" | "spend_logs" | "llm_traces";
             /** Truncated */
             truncated: boolean;
         };
@@ -47831,7 +47831,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "agent_traces_by_key" | "spend_logs" | "llm_traces";
             /** Truncated */
             truncated: boolean;
         };
@@ -47856,7 +47856,7 @@ export interface components {
              * Table
              * @enum {string}
              */
-            table: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            table: "otel_traces" | "agent_traces_by_key" | "spend_logs" | "llm_traces";
             /** Type */
             type: string;
         };
@@ -47884,7 +47884,7 @@ export interface components {
              * Name
              * @enum {string}
              */
-            name: "otel_traces" | "agent_traces_by_key" | "spend_logs";
+            name: "otel_traces" | "agent_traces_by_key" | "spend_logs" | "llm_traces";
         };
         /** TraceSQLResponse */
         TraceSQLResponse: {
