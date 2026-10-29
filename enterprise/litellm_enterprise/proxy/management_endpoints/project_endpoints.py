@@ -1176,3 +1176,8 @@ async def list_projects(
             )
         )
         raise handle_exception_on_proxy(e)
+
+
+@router.get("/project/qa_probe")
+async def project_qa_probe() -> dict:
+    return {}
