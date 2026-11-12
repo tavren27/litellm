@@ -6147,4 +6147,7 @@ async def test_a_trailing_user_message_with_content_the_adapter_drops_gets_no_bl
         ],
     )
 
-    assert {"role": "user", "parts": [{"text": " "}]} not in json.loads(route.calls.last.request.read())["contents"]
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+    ]
