@@ -6626,3 +6626,35 @@ def test_a_dropped_trailing_user_item_becomes_an_empty_user_turn_only_for_a_gemi
     assert [
         {key: message_field(message, key) for key in ("role", "content")} for message in result["messages"][1:]
     ] == expected_tail
+
+
+@pytest.mark.parametrize("empty_item", [{"role": "user", "content": None}, {"role": "user"}], ids=["null", "missing"])
+def test_an_empty_user_item_after_a_previous_response_reaches_gemini_as_an_empty_user_turn(
+    empty_item: dict[str, object],
+) -> None:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "Hi"}, Message(role="assistant", content="Hello!")],
+            litellm_session_id=None,
+        )
+
+    bridged: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input=[empty_item],
+        responses_api_request={"previous_response_id": "resp_earlier"},
+        custom_llm_provider=None,
+    )
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_earlier",
+            litellm_completion_request=bridged,
+            instructions=None,
+            session_lookup=session_lookup,
+        )
+    )
+
+    assert [(message_field(message, "role"), message_field(message, "content")) for message in request["messages"]] == [
+        ("user", "Hi"),
+        ("assistant", "Hello!"),
+        ("user", ""),
+    ]

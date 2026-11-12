@@ -391,6 +391,17 @@ def detect_first_expected_role(
     return None
 
 
+def _is_blank(content: object) -> bool:
+    return content is None or (isinstance(content, (str, list)) and not content)
+
+
+def is_empty_user_message(message: object) -> bool:
+    mapping: Final = as_str_mapping(message)
+    if mapping is not None:
+        return mapping.get("role") == "user" and _is_blank(mapping.get("content"))
+    return getattr(message, "role", None) == "user" and _is_blank(getattr(message, "content", None))
+
+
 def _counts_for_alternation(message: AllMessageValues) -> bool:
     role: Final = message.get("role")
     if role == "user":
@@ -518,7 +529,12 @@ def get_completion_messages(
         return messages.copy()
 
     ## INSERT USER CONTINUE MESSAGE
-    messages = _insert_user_continue_message(messages, user_continue_message, ensure_alternating_roles)
+    filled_messages: Final = (
+        [*messages[:-1], user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE]
+        if messages and is_empty_user_message(messages[-1])
+        else messages
+    )
+    messages = _insert_user_continue_message(filled_messages, user_continue_message, ensure_alternating_roles)
 
     ## INSERT ASSISTANT CONTINUE MESSAGE
     messages = _insert_assistant_continue_message(messages, assistant_continue_message, ensure_alternating_roles)

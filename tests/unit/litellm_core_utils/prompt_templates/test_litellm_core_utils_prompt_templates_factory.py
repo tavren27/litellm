@@ -6560,6 +6560,46 @@ def test_ensure_alternating_roles(messages, expected_messages, user_continue_mes
     assert messages == expected_messages
 
 
+@pytest.mark.parametrize(
+    "empty_user_message",
+    [{"role": "user", "content": ""}, {"role": "user", "content": []}, {"role": "user", "content": None}, {"role": "user"}],
+    ids=["empty_string", "empty_list", "null", "missing"],
+)
+@pytest.mark.parametrize(
+    "user_continue_message, expected_last_message",
+    [
+        (None, {"role": "user", "content": "Please continue."}),
+        ({"role": "user", "content": "Keep going"}, {"role": "user", "content": "Keep going"}),
+    ],
+    ids=["default", "configured"],
+)
+def test_ensure_alternating_roles_fills_an_empty_trailing_user_message_with_the_continue_message(
+    empty_user_message, user_continue_message, expected_last_message
+):
+    history = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}]
+
+    assert get_completion_messages(
+        messages=[*history, empty_user_message],
+        assistant_continue_message=None,
+        user_continue_message=user_continue_message,
+        ensure_alternating_roles=True,
+    ) == [*history, expected_last_message]
+
+
+def test_an_empty_trailing_user_message_is_kept_without_ensure_alternating_roles():
+    messages = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, {"role": "user", "content": ""}]
+
+    assert (
+        get_completion_messages(
+            messages=messages,
+            assistant_continue_message=None,
+            user_continue_message={"role": "user", "content": "Keep going"},
+            ensure_alternating_roles=False,
+        )
+        == messages
+    )
+
+
 def test_ensure_alternating_roles_with_tool_calls():
     """Fixes Regression in #18685"""
     messages = [

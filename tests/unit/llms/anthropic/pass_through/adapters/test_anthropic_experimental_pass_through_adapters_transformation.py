@@ -6101,9 +6101,9 @@ async def test_a_dropped_trailing_user_message_adds_no_user_turn_for_a_target_th
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("_chat_bridge_httpx")
-@pytest.mark.parametrize("dropped_user_message", _DROPPED_USER_MESSAGES)
-async def test_a_dropped_trailing_user_message_reaches_gemini_as_the_configured_continue_message(
-    respx_mock: respx.MockRouter, dropped_user_message: dict[str, object]
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+async def test_an_empty_trailing_user_message_reaches_gemini_as_the_configured_continue_message(
+    respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
 ) -> None:
     route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
 
@@ -6111,7 +6111,7 @@ async def test_a_dropped_trailing_user_message_reaches_gemini_as_the_configured_
         model=_GEMINI_MODEL,
         api_key="test-key",
         max_tokens=64,
-        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, dropped_user_message],
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
         ensure_alternating_roles=True,
         user_continue_message={"role": "user", "content": "Keep going"},
     )
@@ -6121,3 +6121,30 @@ async def test_a_dropped_trailing_user_message_reaches_gemini_as_the_configured_
         {"role": "model", "parts": [{"text": "Hello!"}]},
         {"role": "user", "parts": [{"text": "Keep going"}]},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_a_trailing_user_message_with_content_the_adapter_drops_gets_no_blank_user_turn_for_gemini(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+    search_result: Final = {
+        "type": "search_result",
+        "source": "https://example.com/france",
+        "title": "France",
+        "content": [{"type": "text", "text": "The capital of France is Paris."}],
+    }
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": [search_result]},
+        ],
+    )
+
+    assert {"role": "user", "parts": [{"text": " "}]} not in json.loads(route.calls.last.request.read())["contents"]
