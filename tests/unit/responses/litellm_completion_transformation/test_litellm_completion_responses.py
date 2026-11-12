@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     ChatCompletionSession,
@@ -6559,3 +6560,69 @@ def test_a_hosted_mcp_tool_sent_to_responses_on_bedrock_converse_answers_400(mon
     assert raised.value.status_code == 400
     assert "`deepwiki`" in str(raised.value)
     assert "litellm_proxy/mcp/" in str(raised.value)
+
+
+_HELLO: Final = {"role": "assistant", "content": "Hello!"}
+_EMPTY_USER_TURN: Final = {"role": "user", "content": ""}
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "last_item", "extra_kwargs", "expected_tail"),
+    [
+        pytest.param("gemini/gemini-3.8-flash", None, {"role": "user"}, {}, [_HELLO, _EMPTY_USER_TURN], id="gemini"),
+        pytest.param(
+            "gemini-3.8-flash",
+            "vertex_ai",
+            {"role": "user", "content": None},
+            {},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_gemini",
+        ),
+        pytest.param(
+            "command-a-03-2025", "cohere", {"role": "user"}, {}, [_HELLO], id="cohere_accepts_a_model_turn_end"
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "user"},
+            {"ensure_alternating_roles": True},
+            [_HELLO],
+            id="gemini_with_ensure_alternating_roles",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "user", "content": "Go on"},
+            {},
+            [_HELLO, {"role": "user", "content": "Go on"}],
+            id="gemini_with_user_text",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "assistant", "content": "Sure,"},
+            {},
+            [_HELLO, {"role": "assistant", "content": "Sure,"}],
+            id="gemini_with_assistant_prefill",
+        ),
+        pytest.param("an-unmapped-model", None, {"role": "user"}, {}, [_HELLO], id="unresolvable_provider"),
+    ],
+)
+def test_a_dropped_trailing_user_item_becomes_an_empty_user_turn_only_for_a_gemini_target(
+    model: str,
+    custom_llm_provider: str | None,
+    last_item: dict[str, object],
+    extra_kwargs: dict[str, object],
+    expected_tail: list[dict[str, object]],
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=model,
+        input=[{"role": "user", "content": "Hi"}, _HELLO, last_item],
+        responses_api_request={},
+        custom_llm_provider=custom_llm_provider,
+        **extra_kwargs,
+    )
+
+    assert [
+        {key: message_field(message, key) for key in ("role", "content")} for message in result["messages"][1:]
+    ] == expected_tail

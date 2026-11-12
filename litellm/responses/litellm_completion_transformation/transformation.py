@@ -56,7 +56,10 @@ from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import bedrock_declared_cache_point_support
 from litellm.llms.openrouter.chat.transformation import openrouter_model_supports_cache_control
 from litellm.llms.snowflake.chat.transformation import is_snowflake_claude_model
-from litellm.responses.bridge_check import chat_target_accepts_reasoning_summary
+from litellm.responses.bridge_check import (
+    chat_target_accepts_reasoning_summary,
+    empty_user_turn_for_model_turn_end,
+)
 from litellm.responses.litellm_completion_transformation.session_handler import (
     ResponsesSessionHandler,
 )
@@ -861,12 +864,22 @@ class LiteLLMCompletionResponsesConfig:
         keeps_item_marks: Final = _target_keeps_item_marks(
             model, custom_llm_provider, drops_unsupported_params(request_kwargs.get("drop_params"))
         )
-        bridged_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        converted_messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=input,
             responses_api_request=responses_api_request,
             replay_reasoning=True,
             item_cache_control=keeps_item_marks,
         )
+        bridged_messages: Final = [
+            *converted_messages,
+            *empty_user_turn_for_model_turn_end(
+                input[-1] if isinstance(input, list) and input else None,
+                converted_messages,
+                request_kwargs.get("ensure_alternating_roles"),
+                model,
+                custom_llm_provider,
+            ),
+        ]
 
         litellm_completion_request: dict = {
             "messages": (
@@ -1904,8 +1917,6 @@ class LiteLLMCompletionResponsesConfig:
             ]
         else:
             content: Final[object] = input_item.get("content")
-            if content is None and input_item.get("role") == "user":
-                return [GenericChatCompletionMessage(role="user", content="")]
             # Handle None content: Responses API allows None content, but GenericChatCompletionMessage requires content
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:

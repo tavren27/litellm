@@ -8,14 +8,16 @@ from litellm.litellm_core_utils.get_llm_provider_logic import (
     get_llm_provider,
     resolve_model_and_provider_for_metadata,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.llms.azure_ai.chat.transformation import AzureAIGPT5Config
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
     foundry_chat_rejects_function_tools_while_reasoning,
 )
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import OpenAIWebSearchOptions
+from litellm.types.llms.openai import ChatCompletionUserMessage, OpenAIWebSearchOptions
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager, get_model_info_helper
 
@@ -228,3 +230,30 @@ def chat_completion_ends_in_responses_api(
         api_base=api_base,
     )
     return model_info.get("mode") == "responses"
+
+
+def target_rejects_model_turn_end(model: str, custom_llm_provider: str | None) -> bool:
+    try:
+        _, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+        chat_config: Final = ProviderConfigManager.get_provider_chat_config(
+            model=model, provider=LlmProviders(provider)
+        )
+    except (litellm.BadRequestError, ValueError):
+        return False
+    return isinstance(chat_config, VertexGeminiConfig)
+
+
+def empty_user_turn_for_model_turn_end(
+    caller_last_message: object,
+    sent_messages: Sequence[object],
+    ensure_alternating_roles: object,
+    model: str,
+    custom_llm_provider: str | None,
+) -> tuple[ChatCompletionUserMessage, ...]:
+    if ensure_alternating_roles or message_field(caller_last_message, "role") != "user":
+        return ()
+    if not sent_messages or message_field(sent_messages[-1], "role") != "assistant":
+        return ()
+    if not target_rejects_model_turn_end(model, custom_llm_provider):
+        return ()
+    return (ChatCompletionUserMessage(role="user", content=""),)
