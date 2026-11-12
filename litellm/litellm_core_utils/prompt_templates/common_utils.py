@@ -430,7 +430,7 @@ def _insert_user_continue_message(
         return messages
 
     result_messages: Final = messages.copy()  # Don't modify the input list
-    continue_message: Final = user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE
+    continue_message: Final = (user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE).copy()
 
     # Handle first message if it's an assistant message — always prepend
     # user_continue regardless of tool_calls, to preserve backward compatibility.
@@ -485,7 +485,7 @@ def _insert_assistant_continue_message(
     if not ensure_alternating_roles or len(messages) <= 1:
         return messages
 
-    continue_message: Final = assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE
+    continue_message: Final = (assistant_continue_message or DEFAULT_ASSISTANT_CONTINUE_MESSAGE).copy()
 
     # Find indexes where assistant_continue should be inserted (before that index)
     insert_before_indexes: Final[set] = set()
@@ -530,7 +530,7 @@ def get_completion_messages(
 
     ## INSERT USER CONTINUE MESSAGE
     filled_messages: Final = (
-        [*messages[:-1], user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE]
+        [*messages[:-1], (user_continue_message or DEFAULT_USER_CONTINUE_MESSAGE).copy()]
         if messages and is_empty_user_message(messages[-1])
         else messages
     )
