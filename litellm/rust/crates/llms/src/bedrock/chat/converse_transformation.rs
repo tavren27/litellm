@@ -205,6 +205,7 @@ impl BaseConfig for AmazonConverseConfig {
                     // on this path alone.
                     content: Some(text),
                     provider_specific_fields: None,
+                    refusal: None,
                     reasoning_content: None,
                     thinking_blocks: None,
                 },
@@ -472,7 +473,7 @@ mod tests {
     fn replays_an_anthropic_answer_without_its_provider_fields() {
         let conversation = json!([
             {"role": "user", "content": "ping"},
-            {"role": "assistant", "content": "pong",
+            {"role": "assistant", "content": "pong", "refusal": "policy",
              "provider_specific_fields": {"citations": null, "thinking_blocks": null}},
             {"role": "user", "content": "again"}
         ]);

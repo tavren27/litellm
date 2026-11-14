@@ -85,6 +85,8 @@ pub struct ChatCompletionsChoiceMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_specific_fields: Option<Map<String, Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_blocks: Option<Vec<ChatCompletionThinkingBlock>>,

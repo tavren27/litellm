@@ -26,7 +26,7 @@ pub const STREAM_PARAM: &str = "stream";
 
 /// Message fields that carry no meaning for the upstream body, so their
 /// presence does not make a request untranslatable.
-const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
+const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name", "refusal"];
 
 pub(crate) const PROVIDER_SPECIFIC_FIELDS: &str = "provider_specific_fields";
 

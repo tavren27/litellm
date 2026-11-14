@@ -130,6 +130,15 @@ fn stop_reason_fields(
     }
 }
 
+/// Mirrors Python's `refusal_params`.
+fn refusal_explanation(stop_reason: Option<&str>, stop_details: Option<&Value>) -> Option<String> {
+    (stop_reason == Some("refusal"))
+        .then(|| stop_details?.get("explanation")?.as_str())
+        .flatten()
+        .filter(|explanation| !explanation.is_empty())
+        .map(str::to_string)
+}
+
 fn reasoning_text(blocks: &[ChatCompletionThinkingBlock]) -> String {
     blocks
         .iter()
@@ -231,6 +240,7 @@ impl BaseConfig for AnthropicConfig {
                 Error::InvalidResponse(crate::ErrorDetail::invalid("thinking blocks", error))
             })?
         };
+        let refusal = refusal_explanation(body.stop_reason.as_deref(), body.stop_details.as_ref());
 
         Ok(ChatCompletionsResponse {
             created: unix_now(),
@@ -251,6 +261,7 @@ impl BaseConfig for AnthropicConfig {
                             body.stop_details,
                         )),
                     )),
+                    refusal,
                     reasoning_content: (!thinking_blocks.is_empty())
                         .then(|| reasoning_text(&thinking_blocks)),
                     thinking_blocks: (!thinking_blocks.is_empty()).then_some(thinking_blocks),
@@ -1133,11 +1144,33 @@ mod tests {
         );
     }
 
-    fn answer(content: Value, stop_reason: &str) -> Value {
+    #[rstest]
+    #[case::explained("refusal", json!({"type": "refusal", "explanation": "policy"}), json!("policy"))]
+    #[case::no_details("refusal", Value::Null, Value::Null)]
+    #[case::empty_explanation("refusal", json!({"type": "refusal", "explanation": ""}), Value::Null)]
+    #[case::not_a_refusal("end_turn", json!({"type": "refusal", "explanation": "policy"}), Value::Null)]
+    fn message_reports_python_refusal(
+        #[case] stop_reason: &str,
+        #[case] stop_details: Value,
+        #[case] expected: Value,
+    ) {
+        let message = answer(
+            json!([{"type": "text", "text": "no"}]),
+            stop_reason,
+            stop_details,
+        );
+        assert_eq!(
+            message.get("refusal").cloned().unwrap_or(Value::Null),
+            expected
+        );
+    }
+
+    fn answer(content: Value, stop_reason: &str, stop_details: Value) -> Value {
         let response = transform_response(json!({
             "model": "claude-sonnet-4-5",
             "content": content,
             "stop_reason": stop_reason,
+            "stop_details": stop_details,
             "usage": {"input_tokens": 1, "output_tokens": 1}
         }))
         .expect("response transforms");
@@ -1145,22 +1178,28 @@ mod tests {
     }
 
     #[rstest]
-    #[case::text(json!([{"type": "text", "text": "pong"}]), "end_turn")]
-    #[case::refusal(json!([{"type": "text", "text": "pong"}]), "refusal")]
+    #[case::text(json!([{"type": "text", "text": "pong"}]), "end_turn", Value::Null)]
+    #[case::refusal(
+        json!([{"type": "text", "text": "pong"}]),
+        "refusal",
+        json!({"type": "refusal", "explanation": "policy"})
+    )]
     #[case::thinking(
         json!([
             {"type": "thinking", "thinking": "t", "signature": "sig"},
             {"type": "text", "text": "pong"}
         ]),
-        "end_turn"
+        "end_turn",
+        Value::Null
     )]
     fn an_answer_sent_back_as_the_next_turn_replays_without_its_provider_fields(
         #[case] content: Value,
         #[case] stop_reason: &str,
+        #[case] stop_details: Value,
     ) {
         let conversation = json!([
             {"role": "user", "content": "ping"},
-            answer(content.clone(), stop_reason),
+            answer(content.clone(), stop_reason, stop_details),
             {"role": "user", "content": "again"}
         ]);
         assert_eq!(
