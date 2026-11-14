@@ -469,6 +469,21 @@ mod tests {
     }
 
     #[test]
+    fn replays_an_anthropic_answer_without_its_provider_fields() {
+        let conversation = json!([
+            {"role": "user", "content": "ping"},
+            {"role": "assistant", "content": "pong",
+             "provider_specific_fields": {"citations": null, "thinking_blocks": null}},
+            {"role": "user", "content": "again"}
+        ]);
+        assert_eq!(reason(conversation.clone(), json!({})), None);
+        assert_eq!(
+            transform(conversation, json!({}))["messages"][1],
+            json!({"role": "assistant", "content": [{"text": "pong"}]})
+        );
+    }
+
+    #[test]
     fn declines_streaming() {
         assert_eq!(
             reason(

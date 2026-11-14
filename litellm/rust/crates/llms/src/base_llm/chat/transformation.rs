@@ -28,6 +28,17 @@ pub const STREAM_PARAM: &str = "stream";
 /// presence does not make a request untranslatable.
 const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
 
+const PROVIDER_SPECIFIC_FIELDS: &str = "provider_specific_fields";
+
+/// `provider_specific_fields` keys a chat answer carries that Python never reads back
+/// from a request, so an answer sent back as the next turn translates without them.
+const REPLAY_INERT_PROVIDER_FIELDS: &[&str] = &[
+    "citations",
+    "thinking_blocks",
+    "stop_reason",
+    "stop_details",
+];
+
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 
 pub trait BaseConfig: Sync {
@@ -135,14 +146,25 @@ pub fn unsupported_message_fields(
     message: &ChatMessage,
     accepted_fields: &[&str],
 ) -> Option<Decline> {
-    if message.extra.keys().any(|key| {
+    if message.extra.iter().any(|(key, value)| {
         !IGNORABLE_MESSAGE_FIELDS.contains(&key.as_str())
             && !accepted_fields.contains(&key.as_str())
+            && !(key == PROVIDER_SPECIFIC_FIELDS && is_replay_inert(value))
     }) {
         return Some(Decline::new("unrecognized message field"));
     }
     (!matches!(message.role.as_str(), "system" | "user" | "assistant"))
         .then_some(Decline::new("unrecognized message role"))
+}
+
+fn is_replay_inert(provider_specific_fields: &Value) -> bool {
+    match provider_specific_fields {
+        Value::Null => true,
+        Value::Object(fields) => fields
+            .keys()
+            .all(|key| REPLAY_INERT_PROVIDER_FIELDS.contains(&key.as_str())),
+        _ => false,
+    }
 }
 
 pub fn unsupported_message_content(content: Option<&ChatMessageContent>) -> Option<Decline> {

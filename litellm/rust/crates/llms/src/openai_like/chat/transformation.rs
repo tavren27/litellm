@@ -748,6 +748,21 @@ mod tests {
     }
 
     #[rstest]
+    fn sends_an_anthropic_answer_on_with_its_provider_fields_like_python() {
+        let conversation = json!([
+            {"role": "user", "content": "ping"},
+            {"role": "assistant", "content": "pong",
+             "provider_specific_fields": {"citations": null, "thinking_blocks": null}},
+            {"role": "user", "content": "again"},
+        ]);
+        assert_eq!(reason(conversation.clone(), json!({})), None);
+        assert_eq!(
+            transform("my-model", conversation.clone(), json!({}))["messages"],
+            conversation
+        );
+    }
+
+    #[rstest]
     fn other_unrecognized_message_fields_still_decline() {
         assert_eq!(
             reason(

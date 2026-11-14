@@ -67,6 +67,8 @@ struct ResponseProjection {
     content: Vec<ResponseBlock>,
     usage: ResponseUsageProjection,
     stop_reason: Option<String>,
+    #[serde(default)]
+    stop_details: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -108,6 +110,23 @@ impl ResponseBlock {
             }
             Self::Text { .. } | Self::Other => None,
         }
+    }
+}
+
+/// Mirrors Python's `stop_reason_provider_specific_fields`.
+fn stop_reason_fields(
+    stop_reason: Option<&str>,
+    stop_details: Option<Value>,
+) -> Vec<(String, Value)> {
+    match (stop_reason, stop_details) {
+        (reason, Some(details)) => vec![
+            ("stop_reason".to_string(), json!(reason)),
+            ("stop_details".to_string(), details),
+        ],
+        (Some(reason @ ("refusal" | "pause_turn")), None) => {
+            vec![("stop_reason".to_string(), json!(reason))]
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -205,6 +224,13 @@ impl BaseConfig for AnthropicConfig {
                 _ => None,
             })
             .collect();
+        let thinking_blocks_field = if thinking_blocks.is_empty() {
+            Value::Null
+        } else {
+            serde_json::to_value(&thinking_blocks).map_err(|error| {
+                Error::InvalidResponse(crate::ErrorDetail::invalid("thinking blocks", error))
+            })?
+        };
 
         Ok(ChatCompletionsResponse {
             created: unix_now(),
@@ -214,22 +240,17 @@ impl BaseConfig for AnthropicConfig {
                 message: ChatCompletionsChoiceMessage {
                     role: "assistant".to_string(),
                     content: (!text.is_empty()).then_some(text),
-                    provider_specific_fields: Some(Map::from_iter([
-                        ("citations".to_string(), Value::Null),
-                        (
-                            "thinking_blocks".to_string(),
-                            if thinking_blocks.is_empty() {
-                                Value::Null
-                            } else {
-                                serde_json::to_value(&thinking_blocks).map_err(|error| {
-                                    Error::InvalidResponse(crate::ErrorDetail::invalid(
-                                        "thinking blocks",
-                                        error,
-                                    ))
-                                })?
-                            },
-                        ),
-                    ])),
+                    provider_specific_fields: Some(Map::from_iter(
+                        [
+                            ("citations".to_string(), Value::Null),
+                            ("thinking_blocks".to_string(), thinking_blocks_field),
+                        ]
+                        .into_iter()
+                        .chain(stop_reason_fields(
+                            body.stop_reason.as_deref(),
+                            body.stop_details,
+                        )),
+                    )),
                     reasoning_content: (!thinking_blocks.is_empty())
                         .then(|| reasoning_text(&thinking_blocks)),
                     thinking_blocks: (!thinking_blocks.is_empty()).then_some(thinking_blocks),
@@ -1060,6 +1081,113 @@ mod tests {
         assert_eq!(
             value["choices"][0]["message"]["provider_specific_fields"],
             json!({"citations": null, "thinking_blocks": null})
+        );
+    }
+
+    #[rstest]
+    #[case::end_turn("end_turn", None, json!({"citations": null, "thinking_blocks": null}))]
+    #[case::null_details(
+        "end_turn",
+        Some(Value::Null),
+        json!({"citations": null, "thinking_blocks": null})
+    )]
+    #[case::refusal(
+        "refusal",
+        None,
+        json!({"citations": null, "thinking_blocks": null, "stop_reason": "refusal"})
+    )]
+    #[case::pause_turn(
+        "pause_turn",
+        None,
+        json!({"citations": null, "thinking_blocks": null, "stop_reason": "pause_turn"})
+    )]
+    #[case::refusal_with_details(
+        "refusal",
+        Some(json!({"type": "refusal", "explanation": "e"})),
+        json!({
+            "citations": null,
+            "thinking_blocks": null,
+            "stop_reason": "refusal",
+            "stop_details": {"type": "refusal", "explanation": "e"}
+        })
+    )]
+    fn message_reports_python_stop_reason_fields(
+        #[case] stop_reason: &str,
+        #[case] stop_details: Option<Value>,
+        #[case] expected: Value,
+    ) {
+        let mut body = json!({
+            "model": "claude-sonnet-4-5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": stop_reason,
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        });
+        if let Some(details) = stop_details {
+            body["stop_details"] = details;
+        }
+        let response = transform_response(body).expect("response transforms");
+        let value = serde_json::to_value(response).expect("serializable");
+        assert_eq!(
+            value["choices"][0]["message"]["provider_specific_fields"],
+            expected
+        );
+    }
+
+    fn answer(content: Value, stop_reason: &str) -> Value {
+        let response = transform_response(json!({
+            "model": "claude-sonnet-4-5",
+            "content": content,
+            "stop_reason": stop_reason,
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        }))
+        .expect("response transforms");
+        serde_json::to_value(&response.choices[0].message).expect("serializable")
+    }
+
+    #[rstest]
+    #[case::text(json!([{"type": "text", "text": "pong"}]), "end_turn")]
+    #[case::refusal(json!([{"type": "text", "text": "pong"}]), "refusal")]
+    #[case::thinking(
+        json!([
+            {"type": "thinking", "thinking": "t", "signature": "sig"},
+            {"type": "text", "text": "pong"}
+        ]),
+        "end_turn"
+    )]
+    fn an_answer_sent_back_as_the_next_turn_replays_without_its_provider_fields(
+        #[case] content: Value,
+        #[case] stop_reason: &str,
+    ) {
+        let conversation = json!([
+            {"role": "user", "content": "ping"},
+            answer(content.clone(), stop_reason),
+            {"role": "user", "content": "again"}
+        ]);
+        assert_eq!(
+            reason(conversation.clone(), json!({"max_tokens": 16})),
+            None
+        );
+        assert_eq!(
+            transform("claude-sonnet-4-5", conversation, json!({"max_tokens": 16}))["messages"][1],
+            json!({"role": "assistant", "content": content})
+        );
+    }
+
+    #[rstest]
+    #[case::server_tool_calls(json!({"server_tool_calls": [{"id": "srvtoolu_1"}]}))]
+    #[case::compaction_blocks(json!({"citations": null, "compaction_blocks": []}))]
+    #[case::not_an_object(json!("fields"))]
+    fn declines_provider_fields_python_replays(#[case] fields: Value) {
+        assert_eq!(
+            reason(
+                json!([
+                    {"role": "user", "content": "ping"},
+                    {"role": "assistant", "content": "pong", "provider_specific_fields": fields},
+                    {"role": "user", "content": "again"}
+                ]),
+                json!({"max_tokens": 16})
+            ),
+            Some(Decline::new("unrecognized message field"))
         );
     }
 
