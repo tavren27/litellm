@@ -28,7 +28,7 @@ pub const STREAM_PARAM: &str = "stream";
 /// presence does not make a request untranslatable.
 const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
 
-const PROVIDER_SPECIFIC_FIELDS: &str = "provider_specific_fields";
+pub(crate) const PROVIDER_SPECIFIC_FIELDS: &str = "provider_specific_fields";
 
 /// `provider_specific_fields` keys a chat answer carries that Python never reads back
 /// from a request, so an answer sent back as the next turn translates without them.

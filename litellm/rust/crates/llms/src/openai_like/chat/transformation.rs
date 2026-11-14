@@ -21,9 +21,9 @@ use crate::{
     base_llm::{
         auth::AuthScheme,
         chat::transformation::{
-            BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-            ValidatedEnvironment, unsupported_message_content, unsupported_message_fields,
-            unsupported_param,
+            BaseConfig, Headers, PROVIDER_SPECIFIC_FIELDS, ProviderChatRequestData,
+            ProviderChatResponseData, ValidatedEnvironment, unsupported_message_content,
+            unsupported_message_fields, unsupported_param,
         },
     },
     openai_like::common_utils::{complete_openai_like_url, openai_compatible_provider_info},
@@ -130,7 +130,7 @@ impl BaseConfig for OpenAILikeChatConfig {
                     json!(
                         messages
                             .into_iter()
-                            .map(without_null_fields)
+                            .map(outbound_message)
                             .collect::<Vec<_>>()
                     ),
                 ),
@@ -250,20 +250,22 @@ impl BaseConfig for OpenAILikeChatConfig {
     }
 }
 
-/// `OpenAILikeChatConfig._sanitize_usage_obj`: a provider that reports a null
-/// `*_tokens` entry breaks OpenAI clients, so nulls become 0. Python scrubs
-/// every top-level usage key ending in `_tokens`.
-fn without_null_fields(message: ChatMessage) -> ChatMessage {
+/// Strict OpenAI-compatible vendors reject `provider_specific_fields`, the
+/// response-only field Python's strict-vendor configs strip before sending.
+fn outbound_message(message: ChatMessage) -> ChatMessage {
     ChatMessage {
         extra: message
             .extra
             .into_iter()
-            .filter(|(_, value)| !value.is_null())
+            .filter(|(key, value)| !value.is_null() && key != PROVIDER_SPECIFIC_FIELDS)
             .collect(),
         ..message
     }
 }
 
+/// `OpenAILikeChatConfig._sanitize_usage_obj`: a provider that reports a null
+/// `*_tokens` entry breaks OpenAI clients, so nulls become 0. Python scrubs
+/// every top-level usage key ending in `_tokens`.
 fn sanitize_usage(body: &mut Value) {
     if let Some(usage) = body.get_mut("usage").and_then(Value::as_object_mut) {
         for (key, value) in usage.iter_mut() {
@@ -748,7 +750,7 @@ mod tests {
     }
 
     #[rstest]
-    fn sends_an_anthropic_answer_on_with_its_provider_fields_like_python() {
+    fn sends_an_anthropic_answer_on_without_its_provider_fields() {
         let conversation = json!([
             {"role": "user", "content": "ping"},
             {"role": "assistant", "content": "pong",
@@ -757,8 +759,12 @@ mod tests {
         ]);
         assert_eq!(reason(conversation.clone(), json!({})), None);
         assert_eq!(
-            transform("my-model", conversation.clone(), json!({}))["messages"],
-            conversation
+            transform("my-model", conversation, json!({}))["messages"],
+            json!([
+                {"role": "user", "content": "ping"},
+                {"role": "assistant", "content": "pong"},
+                {"role": "user", "content": "again"},
+            ])
         );
     }
 
