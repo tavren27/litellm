@@ -250,14 +250,18 @@ impl BaseConfig for OpenAILikeChatConfig {
     }
 }
 
-/// Strict OpenAI-compatible vendors reject `provider_specific_fields`, the
-/// response-only field Python's strict-vendor configs strip before sending.
+/// Fields a chat answer carries that strict OpenAI-compatible vendors such as
+/// Mistral reject when the answer is sent back as the next turn.
+const RESPONSE_ONLY_MESSAGE_FIELDS: &[&str] = &[PROVIDER_SPECIFIC_FIELDS, "refusal"];
+
 fn outbound_message(message: ChatMessage) -> ChatMessage {
     ChatMessage {
         extra: message
             .extra
             .into_iter()
-            .filter(|(key, value)| !value.is_null() && key != PROVIDER_SPECIFIC_FIELDS)
+            .filter(|(key, value)| {
+                !value.is_null() && !RESPONSE_ONLY_MESSAGE_FIELDS.contains(&key.as_str())
+            })
             .collect(),
         ..message
     }
@@ -751,7 +755,7 @@ mod tests {
     }
 
     #[rstest]
-    fn sends_an_anthropic_answer_on_without_its_provider_fields() {
+    fn sends_an_anthropic_answer_on_without_its_response_only_fields() {
         let conversation = json!([
             {"role": "user", "content": "ping"},
             {"role": "assistant", "content": "pong", "refusal": "policy",
@@ -763,7 +767,7 @@ mod tests {
             transform("my-model", conversation, json!({}))["messages"],
             json!([
                 {"role": "user", "content": "ping"},
-                {"role": "assistant", "content": "pong", "refusal": "policy"},
+                {"role": "assistant", "content": "pong"},
                 {"role": "user", "content": "again"},
             ])
         );
