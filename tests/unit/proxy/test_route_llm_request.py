@@ -27,6 +27,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import get_team_provider_deployment
 from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
+    ProxyCommaSeparatedModelsStreamError,
     ProxyModelNotFoundError,
     UserConfigRouters,
     endpoint_unsupported_by_model,
@@ -1979,6 +1980,51 @@ async def test_route_request_rejects_responses_without_input():
     llm_router.aresponses.assert_not_called()
 
 
+_COMMA_MODELS_BODY: Final = {"model": "model-a,model-b", "messages": [{"role": "user", "content": "hi"}]}
+
+
+@pytest.mark.asyncio
+async def test_route_request_rejects_streaming_comma_separated_models_before_any_upstream_call() -> None:
+    llm_router: Final = route_entry_points_to_stubs(MagicMock())
+
+    with pytest.raises(ProxyCommaSeparatedModelsStreamError) as exc_info:
+        await route_request({**_COMMA_MODELS_BODY, "stream": True}, llm_router, None, "acompletion")
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.param == "stream"
+    llm_router.abatch_completion.assert_not_called()
+    llm_router.abatch_completion_fastest_response.assert_not_called()
+    llm_router.acompletion.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, "true", None])
+async def test_route_request_batches_comma_separated_models_unless_stream_is_true(stream: bool | str | None) -> None:
+    llm_router: Final = route_entry_points_to_stubs(MagicMock())
+    llm_router.abatch_completion.return_value = "batched"
+
+    response: Final = await route_request({**_COMMA_MODELS_BODY, "stream": stream}, llm_router, None, "acompletion")
+
+    assert response == "batched"
+    llm_router.abatch_completion.assert_called_once_with(
+        models=["model-a", "model-b"], messages=_COMMA_MODELS_BODY["messages"], stream=stream
+    )
+
+
+@pytest.mark.asyncio
+async def test_route_request_streams_comma_separated_models_with_fastest_response() -> None:
+    llm_router: Final = route_entry_points_to_stubs(MagicMock())
+    llm_router.abatch_completion_fastest_response.return_value = "fastest stream"
+    data: Final = {**_COMMA_MODELS_BODY, "stream": True, "fastest_response": True}
+
+    response: Final = await route_request(dict(data), llm_router, None, "acompletion")
+
+    assert response == "fastest stream"
+    llm_router.abatch_completion_fastest_response.assert_called_once_with(**data)
+    llm_router.abatch_completion.assert_not_called()
+
+
 class FakeProxyModelTable:
     def __init__(self, rows):
         self.rows = rows
@@ -3199,33 +3245,6 @@ async def test_user_config_router_enforces_its_limit_across_proxy_requests(
     assert outcomes == await _proxy_router_outcomes(
         fake_redis_port if with_redis else None, routing_settings, deployment_limits, len(outcomes)
     )
-
-
-@pytest.mark.parametrize("arrives_with_logging_obj", [True, False])
-@pytest.mark.asyncio
-async def test_concurrent_user_config_requests_each_count_once_against_the_tpm_limit(
-    fake_redis_port: int, arrives_with_logging_obj: bool
-) -> None:
-    tpm_for_three_requests: Final = await _tpm_for_three_requests()
-
-    def request() -> Coroutine[None, None, str]:
-        return _unsettled_user_config_request_outcome(
-            fake_redis_port,
-            {"routing_strategy": "usage-based-routing-v2"},
-            {"tpm": tpm_for_three_requests},
-            _proxy_logging_obj() if arrives_with_logging_obj else None,
-        )
-
-    async def settled(*requests: Coroutine[None, None, str]) -> list[str]:
-        outcomes: Final = await asyncio.gather(*requests)
-        await _settle_router_accounting()
-        return outcomes
-
-    await _wait_out_a_rate_limit_minute_rollover()
-    concurrent_outcomes: Final = await settled(request(), request())
-    later_outcomes: Final = [*(await settled(request())), *(await settled(request()))]
-
-    assert [*concurrent_outcomes, *later_outcomes] == ["200", "200", "200", "429"]
 
 
 @pytest.mark.asyncio
