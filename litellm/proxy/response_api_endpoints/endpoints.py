@@ -42,6 +42,7 @@ from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
     EMPTY_MAPPING,
     MANAGED_BACKGROUND_RESPONSE_METADATA_KEY,
+    RETURN_RAW_MODEL_NAME_METADATA_KEY,
     SESSION_ID_OMITTED_METADATA_KEY,
     TERMINAL_RESPONSE_STATUSES,
 )
@@ -137,6 +138,7 @@ from litellm.responses.streaming_iterator import (
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router import Router
 from litellm.router_strategy.complexity_router.config import ComplexityRouterConfig
+from litellm.router_utils.fallback_event_handlers import continuation_fallback_targets, fallback_target_name
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     REASONING_EFFORT,
@@ -1011,11 +1013,36 @@ def _model_groups_routed_with_raw_names(llm_router: Router) -> frozenset[str]:
         tagged.strategy.config
         for tagged in itertools.chain.from_iterable(llm_router.registry().plugins("complexity").values())
     )
-    return frozenset(
+    tier_groups: Final = frozenset(
         itertools.chain.from_iterable(
             _model_groups_routed_by(config) for config in configs if config.return_raw_model_name
         )
     )
+    settings: Final = llm_router.settings()
+    fallback_lists: Final[tuple[object, ...]] = (
+        settings.fallbacks,
+        settings.context_window_fallbacks,
+        settings.content_policy_fallbacks,
+    )
+    return _model_groups_reachable_from(tier_groups, llm_router, fallback_lists)
+
+
+def _model_groups_reachable_from(
+    groups: frozenset[str], llm_router: Router, fallback_lists: tuple[object, ...]
+) -> frozenset[str]:
+    reached: Final = groups.union(*(_next_model_groups(group, llm_router, fallback_lists) for group in groups))
+    return groups if reached == groups else _model_groups_reachable_from(reached, llm_router, fallback_lists)
+
+
+def _next_model_groups(group: str, llm_router: Router, fallback_lists: tuple[object, ...]) -> frozenset[str]:
+    fallback_targets: Final = itertools.chain.from_iterable(
+        continuation_fallback_targets(fallbacks, (group,)) for fallbacks in fallback_lists
+    )
+    names: Final = (
+        llm_router.registry().resolve(group, kind="alias"),
+        *(fallback_target_name(target) for target in fallback_targets),
+    )
+    return frozenset(name for name in names if name is not None)
 
 
 def _model_groups_routed_by(config: ComplexityRouterConfig) -> tuple[str, ...]:
@@ -1270,11 +1297,14 @@ def _streamed_retrieval_data_generator(
     request_data: Mapping[str, object],
     request: Request | None = None,
 ) -> AsyncIterator[str | bytes]:
-    chunks: Final = select_data_generator(
-        response=response, user_api_key_dict=user_api_key_dict, request_data=request_data, request=request
-    )
     model_name: Final = (
         None if should_return_raw_model_name(request_data) else _deployment_model_name(response_id, llm_router)
+    )
+    chunks: Final = select_data_generator(
+        response=response,
+        user_api_key_dict=user_api_key_dict,
+        request_data=_reporting_the_provider_model(request_data) if model_name is None else request_data,
+        request=request,
     )
     return _bill_streamed_background_response(
         response,
@@ -1286,6 +1316,14 @@ def _streamed_retrieval_data_generator(
             read_settles_billing=read_settles_billing,
         ),
     )
+
+
+_NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _reporting_the_provider_model(request_data: Mapping[str, object]) -> Mapping[str, object]:
+    metadata: Final = as_str_mapping(request_data.get("metadata")) or _NO_METADATA
+    return {**request_data, "metadata": {**metadata, RETURN_RAW_MODEL_NAME_METADATA_KEY: True}}
 
 
 async def _bill_streamed_background_response(

@@ -1329,6 +1329,32 @@ async def test_a_read_or_cancel_reports_the_deployment_model_name_while_billing_
     return_raw_model_name: bool,
     reported_model: str,
 ):
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": deployment_name,
+                "litellm_params": {"model": deployment_model, "api_key": "sk-fake"},
+                "model_info": {"id": "deployment-read", **model_info},
+            },
+            *other_deployments,
+        ]
+    )
+
+    returned_model, logged_models = await _read_or_cancel_through(
+        monkeypatch, router, endpoint_name, finished_status, return_raw_model_name
+    )
+
+    assert returned_model == reported_model
+    assert logged_models == ["gpt-5.4-mini-2026-03-17"]
+
+
+async def _read_or_cancel_through(
+    monkeypatch: pytest.MonkeyPatch,
+    router: litellm.Router,
+    endpoint_name: str,
+    finished_status: str,
+    return_raw_model_name: bool = False,
+) -> tuple[str, list[str]]:
     from fastapi import Response as FastAPIResponse
 
     from litellm.integrations.custom_logger import CustomLogger
@@ -1341,16 +1367,6 @@ async def test_a_read_or_cancel_reports_the_deployment_model_name_while_billing_
     spend_events: Final = _CapturingLogger()
     monkeypatch.setattr(litellm, "_async_success_callback", [spend_events])
     stored: Final = _one_pending_background_response()
-    router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": deployment_name,
-                "litellm_params": {"model": deployment_model, "api_key": "sk-fake"},
-                "model_info": {"id": "deployment-read", **model_info},
-            },
-            *other_deployments,
-        ]
-    )
     provider_response: Final = _background_response(stored.response_id, finished_status, 100).model_copy(
         update={"model": "gpt-5.4-mini-2026-03-17"}
     )
@@ -1381,8 +1397,52 @@ async def test_a_read_or_cancel_reports_the_deployment_model_name_while_billing_
         )
         await _drain_spend_events()
 
-    assert returned.model == reported_model
-    assert [payload["response"]["model"] for payload in spend_events.payloads] == ["gpt-5.4-mini-2026-03-17"]
+    return returned.model, [payload["response"]["model"] for payload in spend_events.payloads]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "endpoint_name, finished_status",
+    [("get_response", "completed"), ("cancel_response", "cancelled")],
+)
+@pytest.mark.parametrize(
+    "router_tier, router_settings, reported_model",
+    [
+        ("cheap-alias", {"model_group_alias": {"cheap-alias": "oai-plain"}}, "gpt-5.4-mini-2026-03-17"),
+        ("broken-tier", {"fallbacks": [{"broken-tier": ["oai-plain"]}]}, "gpt-5.4-mini-2026-03-17"),
+        ("broken-tier", {"context_window_fallbacks": [{"broken-tier": ["oai-plain"]}]}, "gpt-5.4-mini-2026-03-17"),
+        (
+            "broken-tier",
+            {"fallbacks": [{"broken-tier": ["backup-alias"]}], "model_group_alias": {"backup-alias": "oai-plain"}},
+            "gpt-5.4-mini-2026-03-17",
+        ),
+        ("broken-tier", {"fallbacks": [{"unrelated": ["oai-plain"]}]}, "oai-plain"),
+    ],
+)
+async def test_a_read_or_cancel_reports_the_provider_model_for_a_group_a_raw_name_router_reaches_by_alias_or_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint_name: str,
+    finished_status: str,
+    router_tier: str,
+    router_settings: dict[str, object],
+    reported_model: str,
+):
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "oai-plain",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-fake"},
+                "model_info": {"id": "deployment-read"},
+            },
+            {"model_name": "broken-tier", "litellm_params": {"model": "openai/does-not-exist", "api_key": "sk-fake"}},
+            _complexity_router_over(router_tier, return_raw_model_name=True),
+        ],
+        **router_settings,
+    )
+
+    returned_model, _ = await _read_or_cancel_through(monkeypatch, router, endpoint_name, finished_status)
+
+    assert returned_model == reported_model
 
 
 @pytest.mark.asyncio
@@ -1431,6 +1491,64 @@ async def test_a_streamed_read_reports_the_deployment_model_name_on_every_event(
         {**event, "response": {**provider_response, "model": reported_model}} if "response" in event else event
         for event in provider_events
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deployment_name, deployment_model, model_info",
+    [
+        ("model_name_team-1_def", "openai/gpt-5.4-mini", {"team_id": "team-1", "team_public_model_name": "openai/*"}),
+        ("azure-router", "azure/model-router", {}),
+    ],
+)
+async def test_a_streamed_read_reports_the_provider_model_where_the_plain_read_does(
+    deployment_name: str, deployment_model: str, model_info: dict[str, str]
+):
+    from litellm.litellm_core_utils.core_helpers import should_return_raw_model_name
+    from litellm.proxy.response_api_endpoints.endpoints import _streamed_retrieval_data_generator
+
+    response_id: Final = _one_pending_background_response().response_id
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": deployment_name,
+                "litellm_params": {"model": deployment_model, "api_key": "sk-fake"},
+                "model_info": {"id": "deployment-read", **model_info},
+            }
+        ]
+    )
+    provider_response: Final = {"id": response_id, "status": "completed", "model": "gpt-5.4-mini-2026-03-17"}
+    provider_events: Final = (
+        {"type": "response.created", "response": provider_response},
+        {"type": "response.completed", "response": provider_response},
+    )
+
+    async def frames_stamped_with_the_requested_model(
+        request_data: dict[str, object], **_: object
+    ) -> AsyncIterator[str]:
+        stamped_model: Final = (
+            provider_response["model"] if should_return_raw_model_name(request_data) else request_data["model"]
+        )
+        for event in provider_events:
+            yield f"data: {json.dumps({**event, 'response': {**provider_response, 'model': stamped_model}})}\n\n"
+
+    frames: Final = [
+        frame
+        async for frame in _streamed_retrieval_data_generator(
+            frames_stamped_with_the_requested_model,
+            response_id,
+            True,
+            router,
+            object(),
+            UserAPIKeyAuth(api_key="sk-reader"),
+            {"model": "team-x-gpt"},
+        )
+    ]
+
+    assert [json.loads(str(frame).removeprefix("data: "))["response"]["model"] for frame in frames] == [
+        "gpt-5.4-mini-2026-03-17",
+        "gpt-5.4-mini-2026-03-17",
+    ]
 
 
 @pytest.mark.asyncio

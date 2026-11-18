@@ -1025,7 +1025,7 @@ def test_native_messages_and_responses_routes_fall_back_and_bill_the_fallback(
             else:
                 response_body: Final = JSON_OBJECT.validate_json(response.content)
                 expected_response: Final = (
-                    _native_anthropic_message("fallback", identity, fallback_text)
+                    _native_anthropic_message(fallback_model, identity, fallback_text)
                     if is_messages
                     else {
                         "id": response_body["id"],

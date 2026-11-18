@@ -4069,7 +4069,7 @@ class TestOverrideOpenAIResponseModel:
         served_model: Final = response.model
 
         stamped: Final = _override_openai_response_model(
-            response_obj=response, requested_model="broken-primary", log_context="test_context"
+            response_obj=response, requested_model="broken-primary", log_context="test_context", route_type=call
         )
 
         assert served_model != "gpt-mini"
@@ -4105,7 +4105,10 @@ class TestOverrideOpenAIResponseModel:
         served_model: Final = response.model
 
         stamped: Final = _override_openai_response_model(
-            response_obj=response, requested_model="broken-primary", log_context="test_context"
+            response_obj=response,
+            requested_model="broken-primary",
+            log_context="test_context",
+            route_type="acompletion",
         )
 
         assert served_model not in ("auto-raw", "broken-primary")
@@ -4123,31 +4126,50 @@ class TestOverrideOpenAIResponseModel:
         }
 
         stamped: Final = _override_openai_response_model(
-            response_obj=response_obj, requested_model="broken-primary", log_context="test_context"
+            response_obj=response_obj,
+            requested_model="broken-primary",
+            log_context="test_context",
+            route_type="aresponses",
         )
 
         assert stamped.model == "smart-pick"
 
     @pytest.mark.parametrize("requested_model", ["gpt-4", "azure_ai/model_router"])
-    def test_override_model_reports_fallback_group_when_fallback_occurred_object(self, requested_model):
+    @pytest.mark.parametrize(
+        "route_type, reported_model",
+        [
+            ("acompletion", "gpt-mini"),
+            ("atext_completion", "gpt-mini"),
+            ("aresponses", "gpt-mini"),
+            ("aembedding", "gpt-5.4-mini-2026-03-17"),
+            ("anthropic_messages", "gpt-5.4-mini-2026-03-17"),
+            (None, "gpt-5.4-mini-2026-03-17"),
+        ],
+    )
+    def test_a_fallback_reports_its_group_only_on_routes_that_stream_it(
+        self, requested_model, route_type, reported_model
+    ):
         response_obj = MagicMock()
         response_obj.model = "gpt-5.4-mini-2026-03-17"
         response_obj._hidden_params = {
             "additional_headers": {"x-litellm-attempted-fallbacks": 1, "x-litellm-model-group": "gpt-mini"}
         }
 
-        _override_openai_response_model(
+        stamped: Final = _override_openai_response_model(
             response_obj=response_obj,
             requested_model=requested_model,
             log_context="test_context",
+            route_type=route_type,
         )
 
-        assert response_obj.model == "gpt-mini"
+        assert stamped.model == reported_model
 
-    def test_non_streamed_messages_fallback_reports_the_fallback_group_on_a_copy(self):
+    @pytest.mark.parametrize(
+        "route_type, reported_model", [("aresponses", "claude-fallback"), ("anthropic_messages", "claude-haiku-5-5")]
+    )
+    def test_non_streamed_dict_fallback_is_renamed_on_a_copy(self, route_type, reported_model):
         served_message: Final = {
             "id": "msg_1",
-            "type": "message",
             "model": "claude-haiku-5-5",
             "_hidden_params": {
                 "additional_headers": {"x-litellm-attempted-fallbacks": 1, "x-litellm-model-group": "claude-fallback"}
@@ -4155,10 +4177,13 @@ class TestOverrideOpenAIResponseModel:
         }
 
         stamped: Final = _override_openai_response_model(
-            response_obj=served_message, requested_model="broken-claude", log_context="test_context"
+            response_obj=served_message,
+            requested_model="broken-claude",
+            log_context="test_context",
+            route_type=route_type,
         )
 
-        assert (stamped["model"], served_message["model"]) == ("claude-fallback", "claude-haiku-5-5")
+        assert (stamped["model"], served_message["model"]) == (reported_model, "claude-haiku-5-5")
 
     @pytest.mark.parametrize("model_group", [None, ""])
     def test_override_model_preserves_fallback_model_without_model_group_header(self, model_group):
@@ -4173,6 +4198,7 @@ class TestOverrideOpenAIResponseModel:
             response_obj=response_obj,
             requested_model="gpt-4",
             log_context="test_context",
+            route_type="acompletion",
         )
 
         assert response_obj.model == fallback_model

@@ -2023,17 +2023,24 @@ def _fell_back(hidden_params: Mapping[str, object]) -> bool:
     return isinstance(attempted_fallbacks, (int, float)) and attempted_fallbacks > 0
 
 
+_ROUTES_STREAMING_THE_FALLBACK_GROUP: Final[frozenset[ProxyRouteType]] = frozenset(
+    {"acompletion", "atext_completion", "aresponses"}
+)
+
+
 def _client_facing_response_model(
     requested_model: str,
     hidden_params: Mapping[str, object],
     log_context: str,
+    route_type: ProxyRouteType | None,
 ) -> str | None:
     model_group: Final = _non_empty_str(_additional_headers(hidden_params).get("x-litellm-model-group"))
     if _fell_back(hidden_params):
+        reported_model: Final = model_group if route_type in _ROUTES_STREAMING_THE_FALLBACK_GROUP else None
         verbose_proxy_logger.debug(
-            "%s: fallback detected, reporting fallback model group=%r.", log_context, model_group
+            "%s: fallback detected on route %r, reporting model=%r.", log_context, route_type, reported_model
         )
-        return model_group
+        return reported_model
     candidate_model: Final = model_group if hidden_params.get("fastest_response_batch_completion") else requested_model
     if candidate_model is None:
         verbose_proxy_logger.debug(
@@ -2056,6 +2063,7 @@ def _override_openai_response_model(
     requested_model: str,
     log_context: str,
     return_raw_model_name: bool = False,
+    route_type: ProxyRouteType | None = None,
 ) -> _ResponseT:
     """
     Force the OpenAI-compatible `model` field in the response to match what the client requested.
@@ -2072,11 +2080,12 @@ def _override_openai_response_model(
     including dict responses with no `model` key.
 
     Exceptions:
-    1. If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
-       we report the fallback model group from the x-litellm-model-group header, the
-       same name streamed responses report, on a copy so logging callbacks keep the
-       model that answered. The response keeps the model it served when that header is
-       missing. Exceptions 2 and 3 do not apply to a fallback.
+    1. If a fallback occurred (indicated by x-litellm-attempted-fallbacks header) on a
+       chat, text completion, or responses route, we report the fallback model group from
+       the x-litellm-model-group header, the same name those routes stream, on a copy so
+       logging callbacks keep the model that answered. A fallback on any other route, or
+       without that header, keeps the model it served. Exceptions 2 and 3 do not apply to
+       a fallback.
     2. If the request was to an Azure Model Router, we preserve the actual model
        that was used (e.g., gpt-5-nano-2025-08-07) instead of the router model.
     3. If this was a fastest_response batch completion, use the winning model's
@@ -2086,7 +2095,7 @@ def _override_openai_response_model(
         return response_obj
 
     hidden_params: Final = get_hidden_params_dict(response_obj)
-    target_model: Final = _client_facing_response_model(requested_model, hidden_params, log_context)
+    target_model: Final = _client_facing_response_model(requested_model, hidden_params, log_context, route_type)
     if target_model is None:
         return response_obj
     renames_a_copy: Final = _fell_back(hidden_params)
@@ -4325,6 +4334,7 @@ class ProxyBaseLLMRequestProcessing:
                 requested_model=requested_model_from_client,
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
                 return_raw_model_name=self.returns_raw_model_name,
+                route_type=route_type,
             )
 
         fastapi_response.headers.update(
