@@ -63,6 +63,7 @@ from litellm.litellm_core_utils.reasoning_effort_capability import (
     model_group_from_metadata,
     resolve_deployment_reasoning_effort,
 )
+from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.common_utils import get_openai_credentials
@@ -3062,7 +3063,10 @@ async def _aresponses_websocket(
     deployment_kwargs: Final = {k: v for k, v in kwargs.items() if k not in _RESPONSES_WS_ROUTING_HINT_KEYS}
     first_message: Final = kwargs.get("first_message")
     client_model: Final = (
-        None if should_return_raw_model_name(_STR_MAPPING.validate_python(kwargs)) else responses_ws_client_model
+        None
+        if should_return_raw_model_name(_STR_MAPPING.validate_python(kwargs))
+        or any(AzureFoundryModelInfo.is_model_router_call(model=name) for name in (model, responses_ws_client_model))
+        else responses_ws_client_model
     )
 
     return await base_llm_http_handler.async_responses_websocket(

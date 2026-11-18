@@ -81,7 +81,6 @@ from litellm.proxy.common_request_processing import (
     is_azure_model_router_request,
     open_sse_before_first_byte,
     resolve_litellm_call_id,
-    raw_name_router_groups,
     should_return_raw_model_name,
     sse_error_payload,
     ttft_keepalive_interval,
@@ -4078,7 +4077,7 @@ class TestOverrideOpenAIResponseModel:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("return_raw_model_name", [False, True])
-    async def test_non_streamed_fallback_into_raw_name_router_keeps_the_served_model(self, return_raw_model_name):
+    async def test_non_streamed_fallback_into_raw_name_router_reports_its_group(self, return_raw_model_name):
         router: Final = litellm.Router(
             model_list=[
                 {"model_name": "broken-primary", "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-fake"}},
@@ -4106,16 +4105,13 @@ class TestOverrideOpenAIResponseModel:
         served_model: Final = response.model
 
         stamped: Final = _override_openai_response_model(
-            response_obj=response,
-            requested_model="broken-primary",
-            log_context="test_context",
-            raw_name_groups=raw_name_router_groups(router),
+            response_obj=response, requested_model="broken-primary", log_context="test_context"
         )
 
         assert served_model not in ("auto-raw", "broken-primary")
-        assert stamped.model == (served_model if return_raw_model_name else "auto-raw")
+        assert (stamped.model, response.model) == ("auto-raw", served_model)
 
-    def test_non_streamed_fallback_into_azure_model_router_keeps_the_served_model(self):
+    def test_non_streamed_fallback_into_azure_model_router_reports_its_group(self):
         from litellm.llms.azure_ai.common_utils import AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY
 
         served_model: Final = "azure_ai/gpt-5-nano-2025-08-07"
@@ -4126,11 +4122,11 @@ class TestOverrideOpenAIResponseModel:
             AZURE_MODEL_ROUTER_SELECTED_MODEL_KEY: served_model,
         }
 
-        _override_openai_response_model(
+        stamped: Final = _override_openai_response_model(
             response_obj=response_obj, requested_model="broken-primary", log_context="test_context"
         )
 
-        assert response_obj.model == served_model
+        assert stamped.model == "smart-pick"
 
     @pytest.mark.parametrize("requested_model", ["gpt-4", "azure_ai/model_router"])
     def test_override_model_reports_fallback_group_when_fallback_occurred_object(self, requested_model):

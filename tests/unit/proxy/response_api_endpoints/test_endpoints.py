@@ -1261,13 +1261,14 @@ def _complexity_router_over(
     [("get_response", "completed"), ("cancel_response", "cancelled")],
 )
 @pytest.mark.parametrize(
-    "deployment_name, model_info, other_deployments, return_raw_model_name, reported_model",
+    "deployment_name, deployment_model, model_info, other_deployments, return_raw_model_name, reported_model",
     [
-        ("oai-alias", {}, (), False, "oai-alias"),
-        ("oai-alias", {}, (), True, "gpt-5.4-mini-2026-03-17"),
-        ("openai/*", {}, (), False, "gpt-5.4-mini-2026-03-17"),
+        ("oai-alias", "openai/gpt-5.4-mini", {}, (), False, "oai-alias"),
+        ("oai-alias", "openai/gpt-5.4-mini", {}, (), True, "gpt-5.4-mini-2026-03-17"),
+        ("openai/*", "openai/gpt-5.4-mini", {}, (), False, "gpt-5.4-mini-2026-03-17"),
         (
             "model_name_team-1_abc",
+            "openai/gpt-5.4-mini",
             {"team_id": "team-1", "team_public_model_name": "team-gpt"},
             (),
             False,
@@ -1275,6 +1276,7 @@ def _complexity_router_over(
         ),
         (
             "model_name_team-1_def",
+            "openai/gpt-5.4-mini",
             {"team_id": "team-1", "team_public_model_name": "openai/*"},
             (),
             False,
@@ -1282,20 +1284,38 @@ def _complexity_router_over(
         ),
         (
             "oai-alias",
+            "openai/gpt-5.4-mini",
             {},
             (_complexity_router_over("oai-alias", return_raw_model_name=True),),
             False,
             "gpt-5.4-mini-2026-03-17",
         ),
-        ("oai-alias", {}, (_complexity_router_over("oai-alias", return_raw_model_name=False),), False, "oai-alias"),
-        ("oai-alias", {}, (_complexity_router_over("gpt-mini", return_raw_model_name=True),), False, "oai-alias"),
         (
             "oai-alias",
+            "openai/gpt-5.4-mini",
+            {},
+            (_complexity_router_over("oai-alias", return_raw_model_name=False),),
+            False,
+            "oai-alias",
+        ),
+        (
+            "oai-alias",
+            "openai/gpt-5.4-mini",
+            {},
+            (_complexity_router_over("gpt-mini", return_raw_model_name=True),),
+            False,
+            "oai-alias",
+        ),
+        (
+            "oai-alias",
+            "openai/gpt-5.4-mini",
             {},
             (_complexity_router_over("gpt-mini", return_raw_model_name=True, default_model="oai-alias"),),
             False,
             "gpt-5.4-mini-2026-03-17",
         ),
+        ("azure-router", "azure/model-router", {}, (), False, "gpt-5.4-mini-2026-03-17"),
+        ("model-router", "azure/router-deployment", {}, (), False, "gpt-5.4-mini-2026-03-17"),
     ],
 )
 async def test_a_read_or_cancel_reports_the_deployment_model_name_while_billing_logs_the_provider_model(
@@ -1303,6 +1323,7 @@ async def test_a_read_or_cancel_reports_the_deployment_model_name_while_billing_
     endpoint_name: str,
     finished_status: str,
     deployment_name: str,
+    deployment_model: str,
     model_info: dict[str, str],
     other_deployments: tuple[dict[str, object], ...],
     return_raw_model_name: bool,
@@ -1324,7 +1345,7 @@ async def test_a_read_or_cancel_reports_the_deployment_model_name_while_billing_
         model_list=[
             {
                 "model_name": deployment_name,
-                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-fake"},
+                "litellm_params": {"model": deployment_model, "api_key": "sk-fake"},
                 "model_info": {"id": "deployment-read", **model_info},
             },
             *other_deployments,

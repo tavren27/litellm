@@ -5201,11 +5201,16 @@ class _ProviderChunk(BaseModel):
 class TestResponsesWebSocketClientModel:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "litellm_metadata, reported_model",
-        [({}, "oai-alias"), ({RETURN_RAW_MODEL_NAME_METADATA_KEY: True}, "gpt-5.4-mini-2026-03-17")],
+        "model, client_model, litellm_metadata, reported_model",
+        [
+            ("openai/gpt-5.4-mini", "oai-alias", {}, "oai-alias"),
+            ("openai/gpt-5.4-mini", "oai-alias", {RETURN_RAW_MODEL_NAME_METADATA_KEY: True}, "gpt-5.4-mini-2026-03-17"),
+            ("azure/model-router", "azure-router", {}, "gpt-5.4-mini-2026-03-17"),
+            ("azure/router-deployment", "model-router", {}, "gpt-5.4-mini-2026-03-17"),
+        ],
     )
     async def test_native_relay_sends_the_client_model_and_logs_the_provider_model(
-        self, litellm_metadata: Mapping[str, object], reported_model: str
+        self, model: str, client_model: str, litellm_metadata: Mapping[str, object], reported_model: str
     ):
         from unittest.mock import AsyncMock, patch
 
@@ -5261,13 +5266,14 @@ class TestResponsesWebSocketClientModel:
         with patch("websockets.connect", FakeConnect):
             await asyncio.wait_for(
                 responses_main._aresponses_websocket.__wrapped__(
-                    model="openai/gpt-5.4-mini",
+                    model=model,
                     websocket=client_ws,
                     api_key="sk-test",
+                    api_base="https://example-resource.openai.azure.com" if model.startswith("azure/") else None,
                     litellm_logging_obj=logging_obj,
                     litellm_metadata=dict(litellm_metadata),
-                    first_message=json.dumps({"type": "response.create", "model": "oai-alias", "input": "hi"}),
-                    responses_ws_client_model="oai-alias",
+                    first_message=json.dumps({"type": "response.create", "model": client_model, "input": "hi"}),
+                    responses_ws_client_model=client_model,
                 ),
                 timeout=10,
             )

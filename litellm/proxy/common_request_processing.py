@@ -2014,26 +2014,6 @@ def _non_empty_str(value: object) -> str | None:
 _NO_HEADERS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
-def raw_name_router_groups(llm_router: Router | None) -> frozenset[str]:
-    if llm_router is None:
-        return frozenset()
-    return frozenset(
-        model_group
-        for model_group, tagged_routers in llm_router.registry().plugins("complexity").items()
-        if any(tagged.strategy.config.return_raw_model_name for tagged in tagged_routers)
-    )
-
-
-def _fallback_group_reports_served_model(
-    model_group: str | None, hidden_params: Mapping[str, object], raw_name_groups: frozenset[str]
-) -> bool:
-    return (
-        model_group is None
-        or model_group in raw_name_groups
-        or is_azure_model_router_request(model_group, hidden_params)
-    )
-
-
 def _additional_headers(hidden_params: Mapping[str, object]) -> Mapping[str, object]:
     return as_str_mapping(hidden_params.get("additional_headers")) or _NO_HEADERS
 
@@ -2047,15 +2027,9 @@ def _client_facing_response_model(
     requested_model: str,
     hidden_params: Mapping[str, object],
     log_context: str,
-    raw_name_groups: frozenset[str],
 ) -> str | None:
     model_group: Final = _non_empty_str(_additional_headers(hidden_params).get("x-litellm-model-group"))
     if _fell_back(hidden_params):
-        if _fallback_group_reports_served_model(model_group, hidden_params, raw_name_groups):
-            verbose_proxy_logger.debug(
-                "%s: fallback to model group=%r, preserving the model it served.", log_context, model_group
-            )
-            return None
         verbose_proxy_logger.debug(
             "%s: fallback detected, reporting fallback model group=%r.", log_context, model_group
         )
@@ -2082,7 +2056,6 @@ def _override_openai_response_model(
     requested_model: str,
     log_context: str,
     return_raw_model_name: bool = False,
-    raw_name_groups: frozenset[str] = frozenset(),
 ) -> _ResponseT:
     """
     Force the OpenAI-compatible `model` field in the response to match what the client requested.
@@ -2103,9 +2076,7 @@ def _override_openai_response_model(
        we report the fallback model group from the x-litellm-model-group header, the
        same name streamed responses report, on a copy so logging callbacks keep the
        model that answered. The response keeps the model it served when that header is
-       missing, or when the group is an Azure Model Router or a complexity router in
-       ``raw_name_groups``, as a direct request to that group would. Exception 3 does
-       not apply to a fallback.
+       missing. Exceptions 2 and 3 do not apply to a fallback.
     2. If the request was to an Azure Model Router, we preserve the actual model
        that was used (e.g., gpt-5-nano-2025-08-07) instead of the router model.
     3. If this was a fastest_response batch completion, use the winning model's
@@ -2115,7 +2086,7 @@ def _override_openai_response_model(
         return response_obj
 
     hidden_params: Final = get_hidden_params_dict(response_obj)
-    target_model: Final = _client_facing_response_model(requested_model, hidden_params, log_context, raw_name_groups)
+    target_model: Final = _client_facing_response_model(requested_model, hidden_params, log_context)
     if target_model is None:
         return response_obj
     renames_a_copy: Final = _fell_back(hidden_params)
@@ -4354,7 +4325,6 @@ class ProxyBaseLLMRequestProcessing:
                 requested_model=requested_model_from_client,
                 log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
                 return_raw_model_name=self.returns_raw_model_name,
-                raw_name_groups=raw_name_router_groups(llm_router),
             )
 
         fastapi_response.headers.update(
