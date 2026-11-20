@@ -8,14 +8,18 @@ export interface CustomerBudgetGroupFields {
   name: string;
   monthlyBudget: string;
   yearlyBudget: string;
+  tpm: string;
+  rpm: string;
   capPolicy: CustomerCapPolicy;
 }
 
 export interface CustomerOrganizationFields {
   name: string;
   customerOrgId: string;
+  budgetMode: "inherit" | "custom" | "profile";
   budgetId: string;
-  monthlyBudget: string;
+  budgetAmount: string;
+  budgetDuration: "1mo" | "12mo";
   tpm: string;
   rpm: string;
   groups: CustomerBudgetGroupFields[];
@@ -25,8 +29,10 @@ export interface CustomerOrganizationFields {
 export const initialCustomerOrganizationFields = (): CustomerOrganizationFields => ({
   name: "",
   customerOrgId: "",
+  budgetMode: "inherit",
   budgetId: "",
-  monthlyBudget: "",
+  budgetAmount: "",
+  budgetDuration: "1mo",
   tpm: "",
   rpm: "",
   groups: [
@@ -35,6 +41,8 @@ export const initialCustomerOrganizationFields = (): CustomerOrganizationFields 
       name: "power_user",
       monthlyBudget: "200",
       yearlyBudget: "2000",
+      tpm: "",
+      rpm: "",
       capPolicy: defaultCustomerCapPolicy,
     },
     {
@@ -42,9 +50,19 @@ export const initialCustomerOrganizationFields = (): CustomerOrganizationFields 
       name: "default_user",
       monthlyBudget: "50",
       yearlyBudget: "500",
+      tpm: "",
+      rpm: "",
       capPolicy: defaultCustomerCapPolicy,
     },
-    { id: "low", name: "low_user", monthlyBudget: "10", yearlyBudget: "100", capPolicy: defaultCustomerCapPolicy },
+    {
+      id: "low",
+      name: "low_user",
+      monthlyBudget: "10",
+      yearlyBudget: "100",
+      tpm: "",
+      rpm: "",
+      capPolicy: defaultCustomerCapPolicy,
+    },
   ],
   defaultGroupId: "default",
 });
@@ -70,6 +88,7 @@ export type CustomerOrganizationFormError =
   | "groupLimitRequired"
   | "invalidBudget"
   | "invalidRateLimit"
+  | "profileRequired"
   | "defaultRequired";
 
 export function validateCustomerBudgetGroups(
@@ -87,13 +106,18 @@ export function validateCustomerBudgetGroups(
   if (new Set(names).size !== names.length) return { ok: false, error: "duplicateGroups" } as const;
   if (
     fields.groups.some(
-      (group) => !existingGroupIds.includes(group.id) && !group.monthlyBudget.trim() && !group.yearlyBudget.trim(),
+      (group) =>
+        !existingGroupIds.includes(group.id) &&
+        [group.monthlyBudget, group.yearlyBudget, group.tpm, group.rpm].every((value) => !value.trim()),
     )
   ) {
     return { ok: false, error: "groupLimitRequired" } as const;
   }
   if (fields.groups.some((group) => !validAmount(group.monthlyBudget) || !validAmount(group.yearlyBudget))) {
     return { ok: false, error: "invalidBudget" } as const;
+  }
+  if (fields.groups.some((group) => !validRate(group.tpm) || !validRate(group.rpm))) {
+    return { ok: false, error: "invalidRateLimit" } as const;
   }
   return { ok: true } as const;
 }
@@ -102,21 +126,26 @@ export function buildCustomerOrganizationBody(fields: CustomerOrganizationFields
   if (!fields.name.trim()) return { ok: false, error: "nameRequired" } as const;
   const validation = validateCustomerBudgetGroups(fields);
   if (!validation.ok) return validation;
-  if (!fields.budgetId && !validAmount(fields.monthlyBudget)) return { ok: false, error: "invalidBudget" } as const;
-  if (!fields.budgetId && (!validRate(fields.tpm) || !validRate(fields.rpm))) {
+  const useProfile = fields.budgetMode === "profile";
+  const useCustom = fields.budgetMode === "custom";
+  if (useProfile && !fields.budgetId) return { ok: false, error: "profileRequired" } as const;
+  if (useCustom && !validAmount(fields.budgetAmount)) return { ok: false, error: "invalidBudget" } as const;
+  if (useCustom && [fields.tpm, fields.rpm].some((value) => !validRate(value))) {
     return { ok: false, error: "invalidRateLimit" } as const;
   }
-  const budget = optionalAmount(fields.monthlyBudget);
+  const budget = optionalAmount(fields.budgetAmount);
   const tpm = optionalAmount(fields.tpm);
   const rpm = optionalAmount(fields.rpm);
+  const hasCustomBudget = useCustom && [budget, tpm, rpm].some((value) => value !== null);
   const body = {
     alias: fields.name.trim(),
     ...(fields.customerOrgId.trim() ? { customer_org_id: fields.customerOrgId.trim() } : {}),
-    ...(fields.budgetId ? { budget_id: fields.budgetId } : {}),
-    ...(!fields.budgetId && (budget !== null || tpm !== null || rpm !== null)
+    ...(useProfile ? { budget_id: fields.budgetId } : {}),
+    ...(useCustom && !hasCustomBudget ? { budget_id: null } : {}),
+    ...(hasCustomBudget
       ? {
           budget: {
-            ...(budget !== null ? { max_budget: budget, budget_duration: "1mo" } : {}),
+            ...(budget !== null ? { max_budget: budget, budget_duration: fields.budgetDuration } : {}),
             ...(tpm !== null ? { tpm_limit: tpm } : {}),
             ...(rpm !== null ? { rpm_limit: rpm } : {}),
           },
@@ -126,6 +155,8 @@ export function buildCustomerOrganizationBody(fields: CustomerOrganizationFields
       name: group.name.trim(),
       cap_policy: group.capPolicy,
       budget_limits: [...limit(group.monthlyBudget, "1mo"), ...limit(group.yearlyBudget, "12mo")],
+      ...(group.tpm.trim() ? { tpm_limit: Number(group.tpm) } : {}),
+      ...(group.rpm.trim() ? { rpm_limit: Number(group.rpm) } : {}),
     })),
     default_budget_template: fields.groups.find((group) => group.id === fields.defaultGroupId)?.name.trim(),
   } satisfies components["schemas"]["OrganizationCreate"];

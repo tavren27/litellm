@@ -85,7 +85,6 @@ from litellm.router_api import (
     SETTING_FIELDS,
     ApplyResult,
     ChangeSet,
-    RouterHealth,
     RouterRegistry,
     RouterSettings,
     RoutingContext,
@@ -1167,13 +1166,13 @@ class _SettingsSource:
         raise NotImplementedError
 
 
-class RustHealth(RouterHealth):
+class RustHealth:
     """``health()``: cooldowns, fail counts and usage, read through the host's routing cache and
     written through the Rust core."""
 
     __slots__ = ("_core",)
 
-    def __init__(self, core: "RustCore") -> None:  # pyright: ignore[reportMissingSuperCall]  # reads the Rust core, not a Router
+    def __init__(self, core: "RustCore") -> None:
         self._core = core
 
     def __getattribute__(self, name: str) -> object:
@@ -1256,9 +1255,11 @@ class RustHealth(RouterHealth):
     ) -> tuple[int | None, int | None]: ...
 
     @overload
-    async def usage(self, model_group: str, *, kind: Literal["remaining"]) -> Mapping[str, int]: ...
+    async def usage(
+        self, model_group: str, *, kind: Literal["remaining"]
+    ) -> dict[str, int]: ...  # mutable-ok: the host's fresh usage dict
 
-    async def usage(  # pyright: ignore[reportIncompatibleMethodOverride]  # the same two kinds
+    async def usage(
         self, model_group: str, *, kind: Literal["current", "remaining"] = "current"
     ) -> tuple[int | None, int | None] | Mapping[str, int]:
         """The group's usage this minute, read from the routing cache over the host registry's
@@ -1764,7 +1765,10 @@ class RustCore(
             usage_selector: Final = self._prefetch_usage_selector(model, request_kwargs)
             deployments: Final = self._hosted._core_get_model_list(model_name=model)  # pyright: ignore[reportPrivateUsage]  # see __init__
             if deployments:
-                RoutingPrefetch.arm(RoutingContext(self), usage_selector, deployments)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]  # the prefetch reads registry() and health(); its deployments list is untyped
+                candidates: Final = self.registry().names(
+                    model, kind="route_candidates", team_id=get_request_team_id(request_kwargs)
+                )
+                RoutingPrefetch.arm(RoutingContext(self), usage_selector, deployments, candidates)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]  # the prefetch reads registry() and health(); its deployments list is untyped
         except Exception as e:  # noqa: BLE001  # a prefetch is an optimisation, never a reason to fail the request
             from litellm._logging import verbose_router_logger
 
