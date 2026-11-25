@@ -275,6 +275,29 @@ def test_zerogpu_rows_have_an_output_limit_that_fits_the_context_window(path: Pa
     assert tuple(key for key, row in rows.items() if row.max_output_tokens > row.max_input_tokens) == ()
 
 
+class _TokenCountFraming(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    token_count_framing: int | None = None
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_xai_latest_aliases_carry_the_token_count_framing_of_the_model_they_name(path: Path) -> None:
+    prices: Final[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue]).validate_json(path.read_bytes())
+    framing: Final = MappingProxyType(
+        {
+            key: _TokenCountFraming.model_validate(value).token_count_framing
+            for key, value in prices.items()
+            if key.startswith("xai/")
+        }
+    )
+    aliases: Final = tuple(key for key in framing if key.endswith("-latest") and key.removesuffix("-latest") in framing)
+    assert aliases, f"No xAI -latest aliases found in {path}"
+    assert {alias: framing[alias] for alias in aliases} == {
+        alias: framing[alias.removesuffix("-latest")] for alias in aliases
+    }
+
+
 def test_github_copilot_rows_resolve_through_get_model_info() -> None:
     rows: Final[Mapping[str, _CopilotEndpointRow]] = _copilot_endpoint_rows(PRICES_PATH)
     assert {
